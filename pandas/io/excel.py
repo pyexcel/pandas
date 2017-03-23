@@ -14,6 +14,7 @@ from pandas.types.common import (is_integer, is_float,
                                  is_bool, is_list_like)
 
 from pandas.core.frame import DataFrame
+from pandas.core.series import Series
 from pandas.io.parsers import TextParser
 from pandas.io.common import (_is_url, _urlopen, _validate_header_arg,
                               EmptyDataError, get_filepath_or_buffer,
@@ -259,7 +260,11 @@ def read_excel(io, sheetname=0, header=0, skiprows=None, skip_footer=0,
         output[sheetname] = df
 
     if index == 0:
-        return df
+        if squeeze and len(sheetdata[0]) == 1:
+            row = [ row[0] for row in sheetdata]
+            return Series(row)
+        else:
+            return df
     else:
         return output
 
