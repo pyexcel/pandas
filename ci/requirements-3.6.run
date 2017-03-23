@@ -20,3 +20,7 @@ beautifulsoup4
 s3fs
 xarray
 ipython
+pyexcel-io
+pyexcel-xls
+pyexcel-xlsx
+pyexcel-ods

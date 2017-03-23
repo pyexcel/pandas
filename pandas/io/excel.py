@@ -341,6 +341,36 @@ class ColumnFilterClass:
         return decision
 
 
+def _validate_freeze_panes(freeze_panes):
+    if freeze_panes is not None:
+        if (
+            len(freeze_panes) == 2 and
+            all(isinstance(item, int) for item in freeze_panes)
+        ):
+            return True
+
+        raise ValueError("freeze_panes must be of form (row, column)"
+                         " where row and column are integers")
+
+    # freeze_panes wasn't specified, return False so it won't be applied
+    # to output sheet
+    return False
+
+
+def _conv_value(val):
+    # Convert numpy types to Python types for the Excel writers.
+    if is_integer(val):
+        val = int(val)
+    elif is_float(val):
+        val = float(val)
+    elif is_bool(val):
+        val = bool(val)
+    elif isinstance(val, Period):
+        val = "%s" % val
+    elif is_list_like(val):
+        val = str(val)
+
+
 @add_metaclass(abc.ABCMeta)
 class ExcelWriter(object):
     """
