@@ -10,7 +10,3 @@ numexpr
 pytables
 bottleneck
 jinja2=2.8
-pyexcel-io
-pyexcel-xls
-pyexcel-xlsx
-pyexcel-ods

@@ -11,7 +11,3 @@ numexpr
 pytables
 matplotlib
 blosc
-pyexcel-io
-pyexcel-xls
-pyexcel-xlsx
-pyexcel-ods

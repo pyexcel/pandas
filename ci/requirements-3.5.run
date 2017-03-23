@@ -19,7 +19,3 @@ psycopg2
 s3fs
 beautifulsoup4
 ipython
-pyexcel-io
-pyexcel-xls
-pyexcel-xlsx
-pyexcel-ods

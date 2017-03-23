@@ -14,7 +14,3 @@ pymysql=0.6.0
 sqlalchemy=0.7.8
 xlsxwriter=0.4.6
 jinja2=2.8
-pyexcel-io
-pyexcel-xls
-pyexcel-xlsx
-pyexcel-ods

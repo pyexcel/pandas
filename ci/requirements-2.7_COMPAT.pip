@@ -1,2 +1,6 @@
 openpyxl
 argparse
+pyexcel-io
+pyexcel-xls
+pyexcel-xlsx
+pyexcel-ods
