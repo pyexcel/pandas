@@ -1,2 +1,6 @@
 xarray==0.9.1
 pandas-gbq
+pyexcel-io
+pyexcel-xls
+pyexcel-xlsx
+pyexcel-ods

@@ -6,3 +6,7 @@ py
 PyCrypto
 mock
 ipython
+pyexcel-io
+pyexcel-xls
+pyexcel-xlsx
+pyexcel-ods

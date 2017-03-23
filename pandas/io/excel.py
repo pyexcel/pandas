@@ -187,6 +187,22 @@ def get_writer(engine_name):
         raise ValueError("No Excel writer '%s'" % engine_name)
 
 
+CONVERTER = {
+    "xlwt": "pyexcel-xls",
+    "xlrd": "pyexcel-xls",
+    "openpyxl": "pyexcel-xlsx",
+    "ezodf": "pyexcel-ods3",
+    "odfpy": "pyexcel-ods"
+}
+
+FILE_TYPES = {
+    "xlwt": "xls",
+    "xlrd": "xls",
+    "openpyxl": "xlsx",
+    "ezodf": "ods3",
+    "odfpy": "ods"
+}
+
 @Appender(_read_excel_doc)
 def read_excel(io, sheetname=0, header=0, skiprows=None, skip_footer=0,
                index_col=None, names=None, parse_cols=None, parse_dates=False,
@@ -194,439 +210,130 @@ def read_excel(io, sheetname=0, header=0, skiprows=None, skip_footer=0,
                convert_float=True, has_index_names=None, converters=None,
                dtype=None, true_values=None, false_values=None, engine=None,
                squeeze=False, **kwds):
-
     if not isinstance(io, ExcelFile):
-        io = ExcelFile(io, engine=engine)
+        excel_file = ExcelFile(io, engine=engine)
+    else:
+        excel_file = io
 
-    return io._parse_excel(
-        sheetname=sheetname, header=header, skiprows=skiprows, names=names,
-        index_col=index_col, parse_cols=parse_cols, parse_dates=parse_dates,
-        date_parser=date_parser, na_values=na_values, thousands=thousands,
-        convert_float=convert_float, has_index_names=has_index_names,
-        skip_footer=skip_footer, converters=converters, dtype=dtype,
-        true_values=true_values, false_values=false_values, squeeze=squeeze,
-        **kwds)
+    library = CONVERTER.get(engine, None)
+    keywords = dict(
+        library=library,
+        auto_detect_int=convert_float
+    )
+    #translate sheetname
+    if isinstance(sheetname, int):
+        keywords['sheet_index'] = sheetname
+    elif isinstance(sheetname, string_types):
+        keywords['sheet_name'] = sheetname
+    elif isinstance(sheetname, list):
+        keywords['sheets'] = sheetname
+
+    #translate skiprows
+    if skiprows:
+        keywords['start_row'] = skiprows
+    else:
+        keywords['start_row'] = 0
+
+    # translate parse_cols
+    if isinstance(parse_cols, int):
+        keywords['column_limit'] = parse_cols
+    elif parse_cols is not None:
+        if isinstance(parse_cols, compat.string_types):
+            parse_cols = _range2cols(parse_cols)
+
+        filter = ColumnFilterClass(parse_cols)
+        keywords['skip_column_func'] = filter
+
+    data_dict = excel_file.get_data(**keywords)
+    output = {}
+    for index, (sheetname, sheetdata) in enumerate(data_dict.items()):
+        length = len(sheetdata)
+        remain = length - skip_footer
+        df = DataFrame(sheetdata[:remain]) 
+        if isinstance(header, int):
+            df.rename(columns=df.iloc[header])
+        elif isinstance(header, list):
+            df.r
+        if names is not None:
+            df.columns = names
+        output[sheetname] = df
+
+    if index == 0:
+        return df
+    else:
+        return output
 
 
-class ExcelFile(object):
-    """
-    Class for parsing tabular excel sheets into DataFrame objects.
-    Uses xlrd. See read_excel for more documentation
-
-    Parameters
-    ----------
-    io : string, path object (pathlib.Path or py._path.local.LocalPath),
-        file-like object or xlrd workbook
-        If a string or path object, expected to be a path to xls or xlsx file
-    engine: string, default None
-        If io is not a buffer or path, this must be set to identify io.
-        Acceptable values are None or xlrd
-    """
-
+class ExcelFile:
     def __init__(self, io, **kwds):
-
-        import xlrd  # throw an ImportError if we need to
-
-        ver = tuple(map(int, xlrd.__VERSION__.split(".")[:2]))
-        if ver < (0, 9):  # pragma: no cover
-            raise ImportError("pandas requires xlrd >= 0.9.0 for excel "
-                              "support, current version " + xlrd.__VERSION__)
-
-        self.io = io
-
         engine = kwds.pop('engine', None)
-
-        if engine is not None and engine != 'xlrd':
-            raise ValueError("Unknown engine: %s" % engine)
+        library = CONVERTER.get(engine, None)
 
         # If io is a url, want to keep the data as bytes so can't pass
         # to get_filepath_or_buffer()
         if _is_url(io):
             io = _urlopen(io)
+            file_type = io.split('.')[-1]
+        else:
+            default_file_type = 'xls'
+            file_type = FILE_TYPES.get(engine, default_file_type)
+            if library is None:
+                if not hasattr(io, 'read'):
+                    file_type = io.split('.')[-1]
         # Deal with S3 urls, path objects, etc. Will convert them to
         # buffer or path string
         io, _, _ = get_filepath_or_buffer(io)
 
-        if engine == 'xlrd' and isinstance(io, xlrd.Book):
-            self.book = io
-        elif not isinstance(io, xlrd.Book) and hasattr(io, "read"):
-            # N.B. xlrd.Book has a read attribute too
-            data = io.read()
-            self.book = xlrd.open_workbook(file_contents=data)
-        elif isinstance(io, compat.string_types):
-            self.book = xlrd.open_workbook(io)
-        else:
-            raise ValueError('Must explicitly set engine if not passing in'
-                             ' buffer or path for io.')
+        self.__file_type = file_type
+        self.__io = io
 
-    def parse(self, sheetname=0, header=0, skiprows=None, skip_footer=0,
-              names=None, index_col=None, parse_cols=None, parse_dates=False,
-              date_parser=None, na_values=None, thousands=None,
-              convert_float=True, has_index_names=None,
-              converters=None, true_values=None, false_values=None,
-              squeeze=False, **kwds):
-        """
-        Parse specified sheet(s) into a DataFrame
+    def get_data(self, **keywords):
+        import pyexcel_io as pio
+        if hasattr(self.__io, 'read'):
+            keywords['file_type'] = self.__file_type
 
-        Equivalent to read_excel(ExcelFile, ...)  See the read_excel
-        docstring for more info on accepted parameters
-        """
-
-        return self._parse_excel(sheetname=sheetname, header=header,
-                                 skiprows=skiprows, names=names,
-                                 index_col=index_col,
-                                 has_index_names=has_index_names,
-                                 parse_cols=parse_cols,
-                                 parse_dates=parse_dates,
-                                 date_parser=date_parser, na_values=na_values,
-                                 thousands=thousands,
-                                 skip_footer=skip_footer,
-                                 convert_float=convert_float,
-                                 converters=converters,
-                                 true_values=true_values,
-                                 false_values=false_values,
-                                 squeeze=squeeze,
-                                 **kwds)
-
-    def _should_parse(self, i, parse_cols):
-
-        def _range2cols(areas):
-            """
-            Convert comma separated list of column names and column ranges to a
-            list of 0-based column indexes.
-
-            >>> _range2cols('A:E')
-            [0, 1, 2, 3, 4]
-            >>> _range2cols('A,C,Z:AB')
-            [0, 2, 25, 26, 27]
-            """
-            def _excel2num(x):
-                "Convert Excel column name like 'AB' to 0-based column index"
-                return reduce(lambda s, a: s * 26 + ord(a) - ord('A') + 1,
-                              x.upper().strip(), 0) - 1
-
-            cols = []
-            for rng in areas.split(','):
-                if ':' in rng:
-                    rng = rng.split(':')
-                    cols += lrange(_excel2num(rng[0]), _excel2num(rng[1]) + 1)
-                else:
-                    cols.append(_excel2num(rng))
-            return cols
-
-        if isinstance(parse_cols, int):
-            return i <= parse_cols
-        elif isinstance(parse_cols, compat.string_types):
-            return i in _range2cols(parse_cols)
-        else:
-            return i in parse_cols
-
-    def _parse_excel(self, sheetname=0, header=0, skiprows=None, names=None,
-                     skip_footer=0, index_col=None, has_index_names=None,
-                     parse_cols=None, parse_dates=False, date_parser=None,
-                     na_values=None, thousands=None, convert_float=True,
-                     true_values=None, false_values=None, verbose=False,
-                     dtype=None, squeeze=False, **kwds):
-
-        skipfooter = kwds.pop('skipfooter', None)
-        if skipfooter is not None:
-            skip_footer = skipfooter
-
-        _validate_header_arg(header)
-        if has_index_names is not None:
-            warn("\nThe has_index_names argument is deprecated; index names "
-                 "will be automatically inferred based on index_col.\n"
-                 "This argmument is still necessary if reading Excel output "
-                 "from 0.16.2 or prior with index names.", FutureWarning,
-                 stacklevel=3)
-
-        if 'chunksize' in kwds:
-            raise NotImplementedError("chunksize keyword of read_excel "
-                                      "is not implemented")
-        if parse_dates:
-            raise NotImplementedError("parse_dates keyword of read_excel "
-                                      "is not implemented")
-
-        if date_parser is not None:
-            raise NotImplementedError("date_parser keyword of read_excel "
-                                      "is not implemented")
-
-        import xlrd
-        from xlrd import (xldate, XL_CELL_DATE,
-                          XL_CELL_ERROR, XL_CELL_BOOLEAN,
-                          XL_CELL_NUMBER)
-
-        epoch1904 = self.book.datemode
-
-        def _parse_cell(cell_contents, cell_typ):
-            """converts the contents of the cell into a pandas
-               appropriate object"""
-
-            if cell_typ == XL_CELL_DATE:
-
-                if xlrd_0_9_3:
-                    # Use the newer xlrd datetime handling.
-                    try:
-                        cell_contents = \
-                            xldate.xldate_as_datetime(cell_contents,
-                                                      epoch1904)
-                    except OverflowError:
-                        return cell_contents
-                    # Excel doesn't distinguish between dates and time,
-                    # so we treat dates on the epoch as times only.
-                    # Also, Excel supports 1900 and 1904 epochs.
-                    year = (cell_contents.timetuple())[0:3]
-                    if ((not epoch1904 and year == (1899, 12, 31)) or
-                            (epoch1904 and year == (1904, 1, 1))):
-                        cell_contents = time(cell_contents.hour,
-                                             cell_contents.minute,
-                                             cell_contents.second,
-                                             cell_contents.microsecond)
-                else:
-                    # Use the xlrd <= 0.9.2 date handling.
-                    try:
-                        dt = xldate.xldate_as_tuple(cell_contents, epoch1904)
-
-                    except xldate.XLDateTooLarge:
-                        return cell_contents
-
-                    if dt[0] < MINYEAR:
-                        cell_contents = time(*dt[3:])
-                    else:
-                        cell_contents = datetime(*dt)
-
-            elif cell_typ == XL_CELL_ERROR:
-                cell_contents = np.nan
-            elif cell_typ == XL_CELL_BOOLEAN:
-                cell_contents = bool(cell_contents)
-            elif convert_float and cell_typ == XL_CELL_NUMBER:
-                # GH5394 - Excel 'numbers' are always floats
-                # it's a minimal perf hit and less suprising
-                val = int(cell_contents)
-                if val == cell_contents:
-                    cell_contents = val
-            return cell_contents
-
-        # xlrd >= 0.9.3 can return datetime objects directly.
-        if LooseVersion(xlrd.__VERSION__) >= LooseVersion("0.9.3"):
-            xlrd_0_9_3 = True
-        else:
-            xlrd_0_9_3 = False
-
-        ret_dict = False
-
-        # Keep sheetname to maintain backwards compatibility.
-        if isinstance(sheetname, list):
-            sheets = sheetname
-            ret_dict = True
-        elif sheetname is None:
-            sheets = self.sheet_names
-            ret_dict = True
-        else:
-            sheets = [sheetname]
-
-        # handle same-type duplicates.
-        sheets = list(OrderedDict.fromkeys(sheets).keys())
-
-        output = OrderedDict()
-
-        for asheetname in sheets:
-            if verbose:
-                print("Reading sheet %s" % asheetname)
-
-            if isinstance(asheetname, compat.string_types):
-                sheet = self.book.sheet_by_name(asheetname)
-            else:  # assume an integer if not a string
-                sheet = self.book.sheet_by_index(asheetname)
-
-            data = []
-            should_parse = {}
-
-            for i in range(sheet.nrows):
-                row = []
-                for j, (value, typ) in enumerate(zip(sheet.row_values(i),
-                                                     sheet.row_types(i))):
-                    if parse_cols is not None and j not in should_parse:
-                        should_parse[j] = self._should_parse(j, parse_cols)
-
-                    if parse_cols is None or should_parse[j]:
-                        row.append(_parse_cell(value, typ))
-                data.append(row)
-
-            if sheet.nrows == 0:
-                output[asheetname] = DataFrame()
-                continue
-
-            if is_list_like(header) and len(header) == 1:
-                header = header[0]
-
-            # forward fill and pull out names for MultiIndex column
-            header_names = None
-            if header is not None:
-                if is_list_like(header):
-                    header_names = []
-                    control_row = [True for x in data[0]]
-                    for row in header:
-                        if is_integer(skiprows):
-                            row += skiprows
-
-                        data[row], control_row = _fill_mi_header(
-                            data[row], control_row)
-                        header_name, data[row] = _pop_header_name(
-                            data[row], index_col)
-                        header_names.append(header_name)
-                else:
-                    data[header] = _trim_excel_header(data[header])
-
-            if is_list_like(index_col):
-                # forward fill values for MultiIndex index
-                if not is_list_like(header):
-                    offset = 1 + header
-                else:
-                    offset = 1 + max(header)
-
-                for col in index_col:
-                    last = data[offset][col]
-                    for row in range(offset + 1, len(data)):
-                        if data[row][col] == '' or data[row][col] is None:
-                            data[row][col] = last
-                        else:
-                            last = data[row][col]
-
-            if is_list_like(header) and len(header) > 1:
-                has_index_names = True
-
-            # GH 12292 : error when read one empty column from excel file
-            try:
-                parser = TextParser(data, header=header, index_col=index_col,
-                                    has_index_names=has_index_names,
-                                    na_values=na_values,
-                                    thousands=thousands,
-                                    parse_dates=parse_dates,
-                                    date_parser=date_parser,
-                                    true_values=true_values,
-                                    false_values=false_values,
-                                    skiprows=skiprows,
-                                    skipfooter=skip_footer,
-                                    squeeze=squeeze,
-                                    dtype=dtype,
-                                    **kwds)
-
-                output[asheetname] = parser.read()
-                if names is not None:
-                    output[asheetname].columns = names
-                if not squeeze or isinstance(output[asheetname], DataFrame):
-                    output[asheetname].columns = output[
-                        asheetname].columns.set_names(header_names)
-            except EmptyDataError:
-                # No Data, return an empty DataFrame
-                output[asheetname] = DataFrame()
-
-        if ret_dict:
-            return output
-        else:
-            return output[asheetname]
-
-    @property
-    def sheet_names(self):
-        return self.book.sheet_names()
-
-    def close(self):
-        """close io if necessary"""
-        if hasattr(self.io, 'close'):
-            self.io.close()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.close()
+        raw_data = pio.get_data(self.__io, **keywords)
+        return raw_data
 
 
-def _validate_freeze_panes(freeze_panes):
-    if freeze_panes is not None:
-        if (
-            len(freeze_panes) == 2 and
-            all(isinstance(item, int) for item in freeze_panes)
-        ):
-            return True
-
-        raise ValueError("freeze_panes must be of form (row, column)"
-                         " where row and column are integers")
-
-    # freeze_panes wasn't specified, return False so it won't be applied
-    # to output sheet
-    return False
-
-
-def _trim_excel_header(row):
-    # trim header row so auto-index inference works
-    # xlrd uses '' , openpyxl None
-    while len(row) > 0 and (row[0] == '' or row[0] is None):
-        row = row[1:]
-    return row
-
-
-def _fill_mi_header(row, control_row):
-    """Forward fills blank entries in row, but only inside the same parent index
-
-    Used for creating headers in Multiindex.
-    Parameters
-    ----------
-    row : list
-        List of items in a single row.
-    constrol_row : list of boolean
-        Helps to determine if particular column is in same parent index as the
-        previous value. Used to stop propagation of empty cells between
-        different indexes.
-
-    Returns
-    ----------
-    Returns changed row and control_row
+def _range2cols(areas):
     """
-    last = row[0]
-    for i in range(1, len(row)):
-        if not control_row[i]:
-            last = row[i]
+    Convert comma separated list of column names and column ranges to a
+    list of 0-based column indexes.
+    >>> _range2cols('A:E')
+    [0, 1, 2, 3, 4]
+    >>> _range2cols('A,C,Z:AB')
+    [0, 2, 25, 26, 27]
+    """
+    def _excel2num(x):
+        "Convert Excel column name like 'AB' to 0-based column index"
+        return reduce(lambda s, a: s * 26 + ord(a) - ord('A') + 1,
+                      x.upper().strip(), 0) - 1
 
-        if row[i] == '' or row[i] is None:
-            row[i] = last
+    cols = []
+    for rng in areas.split(','):
+        if ':' in rng:
+            rng = rng.split(':')
+            cols += lrange(_excel2num(rng[0]), _excel2num(rng[1]) + 1)
         else:
-            control_row[i] = False
-            last = row[i]
-
-    return row, control_row
-
-# fill blank if index_col not None
+            cols.append(_excel2num(rng))
+    return cols
 
 
-def _pop_header_name(row, index_col):
-    """ (header, new_data) for header rows in MultiIndex parsing"""
-    none_fill = lambda x: None if x == '' else x
+class ColumnFilterClass:
+    def __init__(self, column_list):
+        self.__column_list = column_list
 
-    if index_col is None:
-        # no index col specified, trim data for inference path
-        return none_fill(row[0]), row[1:]
-    else:
-        # pop out header name and fill w/ blank
-        i = index_col if not is_list_like(index_col) else max(index_col)
-        return none_fill(row[i]), row[:i] + [''] + row[i + 1:]
+    def __call__(self, current_index, start, limit=-1):
+        import pyexcel_io.constants as constants
 
-
-def _conv_value(val):
-    # Convert numpy types to Python types for the Excel writers.
-    if is_integer(val):
-        val = int(val)
-    elif is_float(val):
-        val = float(val)
-    elif is_bool(val):
-        val = bool(val)
-    elif isinstance(val, Period):
-        val = "%s" % val
-    elif is_list_like(val):
-        val = str(val)
-
-    return val
+        decision = constants.SKIP_DATA
+        if current_index in self.__column_list:
+            decision = constants.TAKE_DATA
+        else:
+            if current_index > max(self.__column_list):
+                decision = constants.STOP_ITERATION
+        return decision
 
 
 @add_metaclass(abc.ABCMeta)
